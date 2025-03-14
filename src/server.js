@@ -7,19 +7,23 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { client, run } from './config/mongodb-connection.js';
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Import routes
+// Load environment variables
+dotenv.config();
+
+// Import models first
+import './models/Image.js';
+import './models/AccessCode.js';
+import './models/Analytics.js';
+
+// Then import routes
 import imagesRouter from './routes/images.js';
 import accessCodesRouter from './routes/accessCodes.js';
 import analyticsRouter from './routes/analytics.js';
-
-// Load environment variables
-dotenv.config();
 
 // CORS Configuration
 const corsOptions = {
@@ -67,9 +71,6 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
 // Connect to MongoDB
 console.log('Attempting to connect to MongoDB...');
 mongoose.connect(process.env.MONGODB_URI, {
@@ -81,21 +82,11 @@ mongoose.connect(process.env.MONGODB_URI, {
     maxPoolSize: 50,
     minPoolSize: 0
 })
-.then(async () => {
+.then(() => {
     console.log('Successfully connected to MongoDB');
     console.log('Connection state:', mongoose.connection.readyState);
     console.log('Database name:', mongoose.connection.name);
     console.log('Host:', mongoose.connection.host);
-    try {
-        await run();
-    } catch (error) {
-        console.error('MongoDB driver connection test failed:', error);
-        console.error('Error details:', {
-            name: error.name,
-            message: error.message,
-            code: error.code
-        });
-    }
 })
 .catch(err => {
     console.error('MongoDB connection error:', err);
@@ -104,52 +95,16 @@ mongoose.connect(process.env.MONGODB_URI, {
         console.error('1. Network connectivity to MongoDB Atlas servers');
         console.error('2. Database credentials are correct');
         console.error('3. Database name and replica set are correct');
-        console.error('Connection details:', {
-            name: err.name,
-            message: err.message,
-            code: err.code,
-            host: mongoose.connection.host
-        });
     }
     process.exit(1);
 });
-
-// Handle MongoDB connection events
-mongoose.connection.on('error', err => {
-    console.error('MongoDB connection error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-    console.log('MongoDB disconnected. Attempting to reconnect...');
-});
-
-mongoose.connection.on('reconnected', () => {
-    console.log('MongoDB reconnected');
-});
-
-// Models
-import './models/Image.js';
-import './models/AccessCode.js';
-import './models/Analytics.js';
 
 // Routes
 app.use('/api/images', imagesRouter);
 app.use('/api/access-codes', accessCodesRouter);
 app.use('/api/analytics', analyticsRouter);
 
-// Add this before the error handling middleware
-app.get('/api/check-ip', (req, res) => {
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    console.log('Client IP:', ip);
-    res.json({ 
-        ip: ip,
-        headers: req.headers,
-        connectionRemoteAddress: req.connection.remoteAddress,
-        socketRemoteAddress: req.socket.remoteAddress
-    });
-});
-
-// Add a health check endpoint
+// Health check endpoint
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok',
@@ -158,23 +113,11 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Add these headers for Render.com
-app.use((req, res, next) => {
-    res.header('X-Powered-By', 'ShowTheWork');
-    res.header('Server-Timing', 'total;dur=123.4');
-    next();
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error('Error caught in middleware:', err);
     console.error('Stack trace:', err.stack);
     res.status(500).json({ error: 'Something went wrong!' });
-});
-
-// Handle SPA routing
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Start server
@@ -199,24 +142,24 @@ server.on('error', (err) => {
 });
 
 // Handle process termination
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
     console.log('Received SIGTERM. Closing server...');
-    server.close(async () => {
+    server.close(() => {
         console.log('Server closed');
-        await mongoose.connection.close();
-        await client.close();
-        console.log('MongoDB connections closed');
-        process.exit(0);
+        mongoose.connection.close(false, () => {
+            console.log('MongoDB connection closed');
+            process.exit(0);
+        });
     });
 });
 
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
     console.log('Received SIGINT. Closing server...');
-    server.close(async () => {
+    server.close(() => {
         console.log('Server closed');
-        await mongoose.connection.close();
-        await client.close();
-        console.log('MongoDB connections closed');
-        process.exit(0);
+        mongoose.connection.close(false, () => {
+            console.log('MongoDB connection closed');
+            process.exit(0);
+        });
     });
 }); 
